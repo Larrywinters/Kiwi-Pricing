@@ -1,0 +1,449 @@
+---
+title: "Pricing Competiton-Kiwi Bubble"
+author: "Winters"
+output: html_document
+---
+```{r setup, include=FALSE}
+rm(list = ls())
+getwd()
+library("dummies")
+library("AER")
+library("plotly")
+library('RColorBrewer')
+library("data.table")
+library("mlogit")
+library("gmnl")
+kiwi_bubbles = read.csv("kiwi_bubbles_P2.csv")
+demo = read.csv("demo_P2.csv")
+```
+
+
+## Case Background
+Kiwi, a major milk tea drink company, owned and sold **'Kiwi Regular'**. The product manager of Kiwi was interested in lanuching new product **'Kiwi Bubbles'** so as to go against the product from major competitors known as **'Mango Bubbles'**.
+Kiwi lanuched product in a test market and collected consumer loyalty card data from 359 consumers over the course of 3 years. Kiwi also had access to **demographical** data from loyalty card system. Data are demonstrated below:
+```{r Rawinput}
+head(kiwi_bubbles, 3)
+head(demo,3)
+```
+For the entire project, assume that all 3 products have $0.50 unit costs and market size is 1000 consumers. 
+
+The manager wanted to retrieve the optimal price for their product, find out potential market segmentations if any, understand internal cannibalization between two product if any, and consider strategic actions from competitors.
+
+## Analytical Objectives
+Insight oriented project
+2. Find the optimal price that maximize Kiwi's profit
+3. Find and understand the market segmentations
+4. Find and interpret the price/cross elasticity between 3 products
+5. Find optimal price repsonse under competiton
+
+## Analytical Process without Segmentation:
+
+1. Establish and fit a Multinomial Logit Model without segementation
+2. Calculate optimal prices and elasticity for KB and KR without segementation.
+
+```{r }
+# Rule out of stock cases
+kiwi_bubbles=kiwi_bubbles[!(kiwi_bubbles$price.KB==99),]
+kiwi_bubbles=kiwi_bubbles[!(kiwi_bubbles$price.KR==99),]
+kiwi_bubbles=kiwi_bubbles[!(kiwi_bubbles$price.MB==99),]
+
+# use mle to estimate parameters for model
+mlogitdata = mlogit.data(kiwi_bubbles,id="id",varying=4:7,choice="choice",shape="wide")
+mle = gmnl(choice ~  price, data = mlogitdata)
+summary(mle) 
+para = as.numeric(mle$coefficients)
+
+# retrieve price elasticiy for each product
+
+avgKB = mean(kiwi_bubbles$price.KB)
+avgMB = mean(kiwi_bubbles$price.MB)
+avgKR = mean(kiwi_bubbles$price.KR)
+
+demand_oneproduct <- function(priceKB,priceKR,priceMB,x){
+  if (x == 1) {
+    prob=exp(para[1]+para[4]*priceKB)
+  } else if (x == 2) {
+    prob=exp(para[2]+para[4]*priceKR)
+  } else if (x == 3) {
+    prob=exp(para[3]+para[4]*priceMB)
+  } else NULL
+  prob <- prob/(1+exp(para[1]+para[4]*priceKB)+exp(para[2]+para[4]*priceKR)+exp(para[3]+para[4]*priceMB))
+  return(prob)
+}
+
+elasticity_oneproduct <- function(priceKB,priceKR,priceMB,x) {
+  elas <- -para[4]*priceKB*(1-demand_oneproduct(priceKB,priceKR,priceMB,x))
+  cross <- -para[4]*priceKB*demand_oneproduct(priceKB,priceKR,priceMB,x)
+  return(c(elas,cross))
+}
+elasticity_oneproduct(avgKB,avgKR,avgMB,1) #KB
+elasticity_oneproduct(avgKB,avgKR,avgMB,2) #KR
+elasticity_oneproduct(avgKB,avgKR,avgMB,3) #MB
+
+# Build Demand for two product
+uc=0.5
+
+demand=function(priceKB,priceKR,priceMB,para){
+  probKB=exp(para[1]+para[4]*priceKB)/(1+exp(para[1]+para[4]*priceKB)+exp(para[2]+para[4]*priceKR)+exp(para[3]+para[4]*priceMB))
+  probKR=exp(para[2]+para[4]*priceKR)/(1+exp(para[1]+para[4]*priceKB)+exp(para[2]+para[4]*priceKR)+exp(para[3]+para[4]*priceMB))
+  return(cbind(probKB,probKR))
+}
+
+profit=function(priceKB,priceKR,priceMB,para){
+  profitKB=demand(priceKB,priceKR,priceMB,para)[,1]*(priceKB-uc)
+  profitKR=demand(priceKB,priceKR,priceMB,para)[,2]*(priceKR-uc)
+  return(cbind(profitKB,profitKR))
+}
+
+#price for two products
+aux=seq(1,3,0.01)
+pricespace=expand.grid(aux,aux)
+
+#total profit
+profitmat=matrix(0L,nrow(pricespace),1)
+for (i in 1:nrow(pricespace)){
+  profitmat[i]=1000*sum(profit(pricespace[i,1],pricespace[i,2],1.43,para)) #1.43 is the MB's price 
+}
+xaxis=list(title="P^{KB}")
+yaxis=list(autorange = "reversed",title="P^{KR}")
+zaxis=list(title="Profit")
+p=plot_ly(x=pricespace[,1],y=pricespace[,2],z=as.numeric(profitmat),
+          type="scatter3d",mode="markers",
+          marker = list(color = as.numeric(profitmat), colorscale = c('#FFE1A1', '#683531'), showscale = TRUE))%>%
+  layout(scene=list(xaxis=xaxis,yaxis=yaxis,zaxis=zaxis))%>%
+  config(mathjax = 'cdn')
+p
+
+# Optimal price
+optPrice = pricespace[profitmat==max(profitmat)]
+optPrice
+profitmat[profitmat==max(profitmat)] #393.4082
+
+```
+**Findings:**
+If we **do not do segmentations**, the optimal price for **KR and KB** is **1.16** which happened to be the same.
+The price elasticity in this case is:
+   Own   Cross
+KB 4.25  0.90
+KR 4.13  1.01
+MB 4.06  0.96
+Note that cross in this case means that this particular product's cross elasticity with all other products.
+
+## Analytical Process with Segementations:
+3. Establish and fit a Multinomial Logit Model with segementation
+  a. Merge two dataset
+  b. Use K-mean to do cluster and pick the number of clusters
+  c. Calculate the shares
+  d. Combine cluster id to rawdata
+  e. Use gmnl to search for all segement from a table of beta0 and beta1
+4. Calculate optimal prices and elasticity for KB and KR with segementation
+
+```{r}
+N = 359 #Number of individuals
+set.seed(0)
+demo_cluster = kmeans(x=demo[, 2:18], centers = 8, nstart = 1000) #We get 9 clusters(1 for customers do not belong to any centers)
+
+#merge data
+cluster_id = data.frame(id = demo$id)
+cluster_id$cluster = demo_cluster$cluster
+data = merge(kiwi_bubbles, cluster_id, by = "id", all.x = T)
+data$cluster[is.na(data$cluster)] = 9 # Assign missing one with cluster no.9
+seg.share = c( table(demo_cluster$cluster),N - sum(table(demo_cluster$cluster))) / N # Calculate share for each cluster
+coef.est = data.frame(segment = 1:8, intercept.KB = NA, intercept.KR = NA, 
+                      intercept.MB = NA, price.coef = NA) # Build an empty coefficient table then we fill it
+for (seg in 1:9) {
+  data.sub = subset(data, cluster == seg)
+  mlogitdata=mlogit.data(data.sub,id="id",varying=4:7,choice="choice",shape="wide")
+  mle= gmnl(choice ~  price, data = mlogitdata)
+  mle
+  coef.est[seg, 2:5] = mle$coefficients
+}
+
+# build the weighted aggregate demand function based on shares for each segements
+agg_choice=function(demand,priceKB,priceKR,priceMB) {
+  
+  agg_choice=seg.share[1]*demand(priceKB,priceKR,priceMB,as.numeric(coef.est[1,2:5]))+
+    seg.share[2]*demand(priceKB,priceKR,priceMB,as.numeric(coef.est[2,2:5]))+
+    seg.share[3]*demand(priceKB,priceKR,priceMB,as.numeric(coef.est[3,2:5]))+
+    seg.share[4]*demand(priceKB,priceKR,priceMB,as.numeric(coef.est[4,2:5]))+
+    seg.share[5]*demand(priceKB,priceKR,priceMB,as.numeric(coef.est[5,2:5]))+ 
+    seg.share[6]*demand(priceKB,priceKR,priceMB,as.numeric(coef.est[6,2:5]))+
+    seg.share[7]*demand(priceKB,priceKR,priceMB,as.numeric(coef.est[7,2:5]))+
+    seg.share[8]*demand(priceKB,priceKR,priceMB,as.numeric(coef.est[8,2:5]))+
+    seg.share[9]*demand(priceKB,priceKR,priceMB,as.numeric(coef.est[9,2:5]))
+  
+  return(agg_choice)
+}
+
+demand_KB=function(priceKB,priceKR,priceMB,para){
+  prob=exp(para[1]+para[4]*priceKB)/(1+exp(para[1]+para[4]*priceKB)+exp(para[2]+para[4]*priceKR)+exp(para[3]+para[4]*priceMB))
+  return(prob)
+}
+
+demand_KR=function(priceKB,priceKR,priceMB,para){
+  prob=exp(para[2]+para[4]*priceKR)/(1+exp(para[1]+para[4]*priceKB)+exp(para[2]+para[4]*priceKR)+exp(para[3]+para[4]*priceMB))
+  return(prob)
+}
+
+demand_MB=function(priceKB,priceKR,priceMB,para){
+  prob=exp(para[3]+para[4]*priceMB)/(1+exp(para[1]+para[4]*priceKB)+exp(para[2]+para[4]*priceKR)+exp(para[3]+para[4]*priceMB))
+  return(prob)
+}
+
+aggKB = agg_choice(demand_KB,avgKB,avgKR,avgMB) #0.1779914
+aggKR = agg_choice(demand_KR,avgKB,avgKR,avgMB) #0.20038
+aggMB = agg_choice(demand_MB,avgKB,avgKR,avgMB) #0.1890433
+
+# Calculate elasticity
+elaFun = function(aggData,demand,selfPrice){
+  ela = -(selfPrice/aggData)*sum(seg.share[1]*coef.est[1,5]*demand(avgKB,avgKR,avgMB,as.numeric(coef.est[1,2:5]))*(1-demand(avgKB,avgKR,avgMB,as.numeric(coef.est[1,2:5]))),
+                                 seg.share[2]*coef.est[2,5]*demand(avgKB,avgKR,avgMB,as.numeric(coef.est[2,2:5]))*(1-demand(avgKB,avgKR,avgMB,as.numeric(coef.est[2,2:5]))),
+                                 seg.share[3]*coef.est[3,5]*demand(avgKB,avgKR,avgMB,as.numeric(coef.est[3,2:5]))*(1-demand(avgKB,avgKR,avgMB,as.numeric(coef.est[3,2:5]))),
+                                 seg.share[4]*coef.est[4,5]*demand(avgKB,avgKR,avgMB,as.numeric(coef.est[4,2:5]))*(1-demand(avgKB,avgKR,avgMB,as.numeric(coef.est[4,2:5]))),
+                                 seg.share[5]*coef.est[5,5]*demand(avgKB,avgKR,avgMB,as.numeric(coef.est[5,2:5]))*(1-demand(avgKB,avgKR,avgMB,as.numeric(coef.est[5,2:5]))),
+                                 seg.share[6]*coef.est[6,5]*demand(avgKB,avgKR,avgMB,as.numeric(coef.est[6,2:5]))*(1-demand(avgKB,avgKR,avgMB,as.numeric(coef.est[6,2:5]))),
+                                 seg.share[7]*coef.est[7,5]*demand(avgKB,avgKR,avgMB,as.numeric(coef.est[7,2:5]))*(1-demand(avgKB,avgKR,avgMB,as.numeric(coef.est[7,2:5]))),
+                                 seg.share[8]*coef.est[8,5]*demand(avgKB,avgKR,avgMB,as.numeric(coef.est[8,2:5]))*(1-demand(avgKB,avgKR,avgMB,as.numeric(coef.est[8,2:5]))),
+                                 seg.share[9]*coef.est[9,5]*demand(avgKB,avgKR,avgMB,as.numeric(coef.est[9,2:5]))*(1-demand(avgKB,avgKR,avgMB,as.numeric(coef.est[9,2:5]))))
+  return(ela)
+}
+
+kbElas = elaFun(aggKB,demand_KB,avgKB) #4.378103
+krElas = elaFun(aggKR,demand_KR,avgKR) #3.634095
+mbElas = elaFun(aggMB,demand_MB,avgMB) #4.278458
+
+#cross-elasticity
+crosselaFun = function(aggData,competitorPrice,demandSelf,demandCompetitor){
+  ela = -(competitorPrice/aggData)*sum(seg.share[1]*coef.est[1,5]*demandSelf(avgKB,avgKR,avgMB,as.numeric(coef.est[1,2:5]))*demandCompetitor(avgKB,avgKR,avgMB,as.numeric(coef.est[1,2:5])),
+                                       seg.share[2]*coef.est[2,5]*demandSelf(avgKB,avgKR,avgMB,as.numeric(coef.est[2,2:5]))*demandCompetitor(avgKB,avgKR,avgMB,as.numeric(coef.est[2,2:5])),
+                                       seg.share[3]*coef.est[3,5]*demandSelf(avgKB,avgKR,avgMB,as.numeric(coef.est[3,2:5]))*demandCompetitor(avgKB,avgKR,avgMB,as.numeric(coef.est[3,2:5])),
+                                       seg.share[4]*coef.est[4,5]*demandSelf(avgKB,avgKR,avgMB,as.numeric(coef.est[4,2:5]))*demandCompetitor(avgKB,avgKR,avgMB,as.numeric(coef.est[4,2:5])),
+                                       seg.share[5]*coef.est[5,5]*demandSelf(avgKB,avgKR,avgMB,as.numeric(coef.est[5,2:5]))*demandCompetitor(avgKB,avgKR,avgMB,as.numeric(coef.est[5,2:5])),
+                                       seg.share[6]*coef.est[6,5]*demandSelf(avgKB,avgKR,avgMB,as.numeric(coef.est[6,2:5]))*demandCompetitor(avgKB,avgKR,avgMB,as.numeric(coef.est[6,2:5])),
+                                       seg.share[7]*coef.est[7,5]*demandSelf(avgKB,avgKR,avgMB,as.numeric(coef.est[7,2:5]))*demandCompetitor(avgKB,avgKR,avgMB,as.numeric(coef.est[7,2:5])),
+                                       seg.share[8]*coef.est[8,5]*demandSelf(avgKB,avgKR,avgMB,as.numeric(coef.est[8,2:5]))*demandCompetitor(avgKB,avgKR,avgMB,as.numeric(coef.est[8,2:5])),
+                                       seg.share[9]*coef.est[9,5]*demandSelf(avgKB,avgKR,avgMB,as.numeric(coef.est[9,2:5]))*demandCompetitor(avgKB,avgKR,avgMB,as.numeric(coef.est[9,2:5])))
+  return(ela)
+}
+
+crosselaFun(aggKB,avgMB,demand_KB,demand_MB) #1.075592
+crosselaFun(aggKB,avgKR,demand_KB,demand_KR) #0.9130573
+
+crosselaFun(aggMB,avgKB,demand_MB,demand_KB) #1.039614
+crosselaFun(aggMB,avgKR,demand_MB,demand_KR) #0.8991862
+
+crosselaFun(aggKR,avgKB,demand_KR,demand_KB) #0.8129505 
+crosselaFun(aggKR,avgMB,demand_KR,demand_MB) #0.8283068
+
+#Profit from each segment
+pricespace = seq(0,2,0.01)
+profit1=1000*seg.share[1]*demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[1,2:5]))*(pricespace-uc)
+profit2=1000*seg.share[2]*demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[2,2:5]))*(pricespace-uc)
+profit3=1000*seg.share[3]*demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[3,2:5]))*(pricespace-uc)
+profit4=1000*seg.share[4]*demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[4,2:5]))*(pricespace-uc)
+profit5=1000*seg.share[5]*demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[5,2:5]))*(pricespace-uc)
+profit6=1000*seg.share[6]*demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[6,2:5]))*(pricespace-uc)
+profit7=1000*seg.share[7]*demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[7,2:5]))*(pricespace-uc)
+profit8=1000*seg.share[8]*demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[8,2:5]))*(pricespace-uc)
+profit9=1000*seg.share[9]*demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[9,2:5]))*(pricespace-uc)
+
+profit11=1000*seg.share[1]*demand_MB(avgKB,avgKR,pricespace,as.numeric(coef.est[1,2:5]))*(pricespace-uc)
+profit12=1000*seg.share[2]*demand_MB(avgKB,avgKR,pricespace,as.numeric(coef.est[2,2:5]))*(pricespace-uc)
+profit13=1000*seg.share[3]*demand_MB(avgKB,avgKR,pricespace,as.numeric(coef.est[3,2:5]))*(pricespace-uc)
+profit14=1000*seg.share[4]*demand_MB(avgKB,avgKR,pricespace,as.numeric(coef.est[4,2:5]))*(pricespace-uc)
+profit15=1000*seg.share[5]*demand_MB(avgKB,avgKR,pricespace,as.numeric(coef.est[5,2:5]))*(pricespace-uc)
+profit16=1000*seg.share[6]*demand_MB(avgKB,avgKR,pricespace,as.numeric(coef.est[6,2:5]))*(pricespace-uc)
+profit17=1000*seg.share[7]*demand_MB(avgKB,avgKR,pricespace,as.numeric(coef.est[7,2:5]))*(pricespace-uc)
+profit18=1000*seg.share[8]*demand_MB(avgKB,avgKR,pricespace,as.numeric(coef.est[8,2:5]))*(pricespace-uc)
+profit19=1000*seg.share[9]*demand_MB(avgKB,avgKR,pricespace,as.numeric(coef.est[9,2:5]))*(pricespace-uc)
+
+profit21=1000*seg.share[1]*demand_KR(avgKB,pricespace,avgMB,as.numeric(coef.est[1,2:5]))*(pricespace-uc)
+profit22=1000*seg.share[2]*demand_KR(avgKB,pricespace,avgMB,as.numeric(coef.est[2,2:5]))*(pricespace-uc)
+profit23=1000*seg.share[3]*demand_KR(avgKB,pricespace,avgMB,as.numeric(coef.est[3,2:5]))*(pricespace-uc)
+profit24=1000*seg.share[4]*demand_KR(avgKB,pricespace,avgMB,as.numeric(coef.est[4,2:5]))*(pricespace-uc)
+profit25=1000*seg.share[5]*demand_KR(avgKB,pricespace,avgMB,as.numeric(coef.est[5,2:5]))*(pricespace-uc)
+profit26=1000*seg.share[6]*demand_KR(avgKB,pricespace,avgMB,as.numeric(coef.est[6,2:5]))*(pricespace-uc)
+profit27=1000*seg.share[7]*demand_KR(avgKB,pricespace,avgMB,as.numeric(coef.est[7,2:5]))*(pricespace-uc)
+profit28=1000*seg.share[8]*demand_KR(avgKB,pricespace,avgMB,as.numeric(coef.est[8,2:5]))*(pricespace-uc)
+profit29=1000*seg.share[9]*demand_KR(avgKB,pricespace,avgMB,as.numeric(coef.est[9,2:5]))*(pricespace-uc)
+
+#max profit
+kbPrice = c(pricespace[profit1==max(profit1)],pricespace[profit2==max(profit2)],pricespace[profit3==max(profit3)],
+            pricespace[profit4==max(profit4)],pricespace[profit5==max(profit5)],pricespace[profit6==max(profit6)],
+            pricespace[profit7==max(profit7)],pricespace[profit8==max(profit8)],pricespace[profit9==max(profit9)])
+
+mbPrice = c(pricespace[profit11==max(profit11)],pricespace[profit12==max(profit12)],pricespace[profit13==max(profit13)],
+            pricespace[profit14==max(profit14)],pricespace[profit15==max(profit15)],pricespace[profit16==max(profit16)],
+            pricespace[profit17==max(profit17)],pricespace[profit18==max(profit18)],pricespace[profit19==max(profit19)])
+
+krPrice = c(pricespace[profit21==max(profit21)],pricespace[profit22==max(profit22)],pricespace[profit23==max(profit23)],
+            pricespace[profit24==max(profit24)],pricespace[profit25==max(profit25)],pricespace[profit26==max(profit26)],
+            pricespace[profit27==max(profit17)],pricespace[profit28==max(profit28)],pricespace[profit29==max(profit29)])
+
+priceData = as.data.frame(rbind(kbPrice,mbPrice,krPrice))
+colnames(priceData) = 1:9
+
+#optimal price - only one product
+demand_KR_2=function(priceKR,priceMB,para){
+  prob=exp(para[2]+para[4]*priceKR)/(1+exp(para[2]+para[4]*priceKR)+exp(para[3]+para[4]*priceMB))
+  return(prob)
+}
+
+agg_choice_new=function(demand,priceKR,priceMB) {
+  
+  agg_choice=seg.share[1]*demand(priceKR,priceMB,as.numeric(coef.est[1,2:5]))+
+    seg.share[2]*demand(priceKR,priceMB,as.numeric(coef.est[2,2:5]))+
+    seg.share[3]*demand(priceKR,priceMB,as.numeric(coef.est[3,2:5]))+
+    seg.share[4]*demand(priceKR,priceMB,as.numeric(coef.est[4,2:5]))+
+    seg.share[5]*demand(priceKR,priceMB,as.numeric(coef.est[5,2:5]))+ 
+    seg.share[6]*demand(priceKR,priceMB,as.numeric(coef.est[6,2:5]))+
+    seg.share[7]*demand(priceKR,priceMB,as.numeric(coef.est[7,2:5]))+
+    seg.share[8]*demand(priceKR,priceMB,as.numeric(coef.est[8,2:5]))+
+    seg.share[9]*demand(priceKR,priceMB,as.numeric(coef.est[9,2:5]))
+  
+  return(agg_choice)
+}
+
+pricespace=seq(0.5,2,0.01)
+profit_KR = 1000*(agg_choice_new(demand_KR_2,pricespace,1.43)*pricespace-agg_choice_new(demand_KR_2,pricespace,1.43)*uc)
+
+
+plot(pricespace,profit_KR,type='l',xlab='Prices',
+     ylab='Profit',ylim=c(10,400),col="blue",lwd=2,
+     cex=2,cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+
+optPrice2 = pricespace[profit_KR==max(profit_KR)] #Only 1 product KR with Price 1.06
+profitMax1 = profit_KR[profit_KR==max(profit_KR)] #Profit 289.9052
+
+#optimal price - two products
+profit_new=function(priceKB,priceKR,priceMB){
+  profitKB=agg_choice(demand_KB,priceKB,priceKR,priceMB)*(priceKB-uc)*1000
+  profitKR=agg_choice(demand_KR,priceKB,priceKR,priceMB)*(priceKR-uc)*1000
+  return(cbind(profitKB,profitKR))
+}
+
+#price for two products
+aux=seq(0.5,2,0.01)
+price=expand.grid(aux,aux)
+
+#total profit
+profitCal=matrix(0L,nrow(price),1)
+for (i in 1:nrow(price)){
+  profitCal[i]=sum(profit_new(price[i,1],price[i,2],1.43))  
+}
+
+optPrice3 = price[profitCal==max(profitCal)] #1.15 1.19
+profitMax2 = profitCal[profitCal==max(profitCal)] #395.3924
+
+```
+**Findings:**
+If we only lanuch one product with segementations, we lanuch **KR** with Price of **1.06**. **Profit** in this case is **289.905**
+If we lanuch two products with segmentations, **KR is 1.15;KB is 1.19**
+**Profit** in this case is **395.392**
+
+Elasticity
+    KB    KR    MB
+KB  4.37 0.91   1.07
+KR  0.91 3.63   0.82 
+MB  1.07 0.82   4.27
+
+We might also want to understand the preference for different segements. Below a chart describing the different segments'preference to KB at different price.
+```{r}
+pricespace=seq(0.5,2,0.01)
+plot(pricespace,demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[1,2:5])),type='l',xlab='Prices',
+     ylab='Probability of purchase',col="blue",lwd=20*seg.share[1],
+     cex=2,cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+lines(pricespace,demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[2,2:5])),col="brown",lwd=20*seg.share[2])
+lines(pricespace,demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[3,2:5])),col="sky blue",lwd=20*seg.share[3])
+lines(pricespace,demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[4,2:5])),col="red",lwd=20*seg.share[4])
+lines(pricespace,demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[5,2:5])),col="green",lwd=20*seg.share[5])
+lines(pricespace,demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[6,2:5])),col="purple",lwd=20*seg.share[5])
+lines(pricespace,demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[7,2:5])),col="orange",lwd=20*seg.share[5])
+lines(pricespace,demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[8,2:5])),col="black",lwd=20*seg.share[5])
+lines(pricespace,demand_KB(pricespace,avgKR,avgMB,as.numeric(coef.est[9,2:5])),col="orange",lwd=20*seg.share[6])
+```
+
+## Analytical Process Strategic Response:
+1. Find MB Response for our optimal prices
+2. And we our next repsonse.
+
+#Round 1
+```{r}
+pricespace=seq(0.5,2,0.01)
+profit_MB = 1000*(agg_choice(demand_MB,1.15,1.19,pricespace)*pricespace-agg_choice(demand_MB,1.15,1.19,pricespace)*uc)
+
+plot(pricespace,profit_MB,type='l',xlab='Prices',
+     ylab='Profit',ylim=c(10,400),col="blue",lwd=2,
+     cex=2,cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+
+optPrice4 = pricespace[profit_MB==max(profit_MB)] #0.96
+profitMax3 = profit_MB[profit_MB==max(profit_MB)] #180.4173
+
+for (i in 1:nrow(price)){
+  profitCal[i]=sum(profit_new(price[i,1],price[i,2],0.96))  
+}
+
+optPrice5 = price[profitCal==max(profitCal)] #1.02 1.08
+profitMax4 = profitCal[profitCal==max(profitCal)] 
+```
+**Findings:**
+MB will respond with a lower price as **0.96** getting a profit of **180.41**.
+Our new price is **1.02 for KB and 1.08 for KR and new profit is 276.87**.
+
+#Round 2
+```{r}
+profit_MB = 1000*(agg_choice(demand_MB,1.02,1.08,pricespace)*pricespace-agg_choice(demand_MB,1.02,1.08,pricespace)*uc)
+
+plot(pricespace,profit_MB,type='l',xlab='Prices',
+     ylab='Profit',ylim=c(10,400),col="blue",lwd=2,
+     cex=2,cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+
+optPrice6 = pricespace[profit_MB==max(profit_MB)] #0.92
+profitMax5 = profit_MB[profit_MB==max(profit_MB)] #147.7467
+
+for (i in 1:nrow(price)){
+  profitCal[i]=sum(profit_new(price[i,1],price[i,2],0.92))  
+}
+
+optPrice7 = price[profitCal==max(profitCal)] #1.01 1.07
+profitMax6 = profitCal[profitCal==max(profitCal)] #263.1639
+```
+**Findings:**
+MB will respond with a lower price as **0.92** getting a profit of **147.74**.
+Our new price is **1.01 for KB and 1.07 for KR and new profit is 263.16**.
+
+#Round 3
+```{r}
+profit_MB = 1000*(agg_choice(demand_MB,1.01,1.07,pricespace)*pricespace-agg_choice(demand_MB,1.01,1.07,pricespace)*uc)
+
+plot(pricespace,profit_MB,type='l',xlab='Prices',
+     ylab='Profit',ylim=c(10,400),col="blue",lwd=2,
+     cex=2,cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+
+optPrice8 = pricespace[profit_MB==max(profit_MB)] #0.91
+profitMax7 = profit_MB[profit_MB==max(profit_MB)] #145.0344
+
+for (i in 1:nrow(price)){
+  profitCal[i]=sum(profit_new(price[i,1],price[i,2],0.91))  
+}
+
+optPrice8 = price[profitCal==max(profitCal)] #1.00 1.07
+profitMax7 = profitCal[profitCal==max(profitCal)] #259.7019
+```
+**Findings:**
+MB will respond with a lower price as **0.91** getting a profit of **145.03**.
+Our new price is **1.00 for KB and 1.07 for KR and new profit is 259.70**.
+
+#Round 4
+```{r}
+profit_MB = 1000*(agg_choice(demand_MB,1.00,1.07,pricespace)*pricespace-agg_choice(demand_MB,1.00,1.07,pricespace)*uc)
+
+plot(pricespace,profit_MB,type='l',xlab='Prices',
+     ylab='Profit',ylim=c(10,400),col="blue",lwd=2,
+     cex=2,cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+
+optPrice9 = pricespace[profit_MB==max(profit_MB)] #0.91
+```
+**Findings:**
+Under this situation, MB can not lower the price anymore. We reach a Nash equilibrium.
+
